@@ -1,4 +1,4 @@
-// File: index.js (VERSI FINAL LENGKAP - SUDAH DIRAPIKAN)
+// File: index.js (VERSI FINAL LENGKAP - PROSES 1, 2, & 3)
 
 const express = require('express');
 const mysql = require('mysql2');
@@ -19,6 +19,7 @@ const storage = multer.diskStorage({
     cb(null, uploadDir); // Folder penyimpanan foto
   },
   filename: function (req, file, cb) {
+    // Buat nama file unik: fieldname-timestamp.extension
     cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
   }
 });
@@ -62,7 +63,6 @@ const verifyToken = (req, res, next) => {
 // Pintu #1: Register
 app.post('/register', async (req, res) => {
  const { nama, email, password } = req.body;
- // Validasi input dasar (opsional tapi disarankan)
  if (!nama || !email || !password) {
     return res.status(400).send({ message: 'Nama, email, dan password wajib diisi.' });
  }
@@ -71,7 +71,6 @@ app.post('/register', async (req, res) => {
     db.query('INSERT INTO users SET ?', { nama: nama, email: email, password: hashedPassword }, (err, results) => {
       if (err) {
         console.error("Database insert error:", err);
-        // Cek jika error karena email duplikat
         if (err.code === 'ER_DUP_ENTRY') {
             return res.status(409).send({ message: 'Email sudah terdaftar.' });
         }
@@ -132,14 +131,13 @@ app.get('/user-profile', verifyToken, (req, res) => {
 
 // --- Pintu Inventaris Barang ---
 
-// Pintu #4: Input Item Baru
+// Pintu #4: Input Item Baru (Sudah termasuk harga)
 app.post('/items', verifyToken, upload.single('itemPhoto'), (req, res) => {
   const userId = req.userId;
-  const { nama_item, scan_code, item_condition, permendagri_code } = req.body; // Sesuaikan nama field 'condition'
+  const { nama_item, scan_code, item_condition, permendagri_code, harga } = req.body;
   const photo_path = req.file ? req.file.path : null;
 
   if (!nama_item || !scan_code) {
-    // Hapus foto jika data wajib tidak lengkap & foto terlanjur diupload
     if (photo_path) try { fs.unlinkSync(photo_path); } catch (e) { console.error("Gagal hapus foto:", e); }
     return res.status(400).send({ message: 'Nama item dan kode scan wajib diisi.' });
   }
@@ -149,8 +147,9 @@ app.post('/items', verifyToken, upload.single('itemPhoto'), (req, res) => {
     photo_path,
     user_id: userId,
     scan_code,
-    item_condition: item_condition || null, // Gunakan nama kolom baru, beri null jika kosong
-    permendagri_code: permendagri_code || null // Beri null jika kosong
+    item_condition: item_condition || null,
+    permendagri_code: permendagri_code || null,
+    harga: harga || null
   };
 
   db.query('INSERT INTO items SET ?', newItem, (err, results) => {
@@ -169,15 +168,15 @@ app.post('/items', verifyToken, upload.single('itemPhoto'), (req, res) => {
 // Pintu #5: Ambil Detail Item berdasarkan Scan Code
 app.get('/items/:scan_code', verifyToken, (req, res) => {
   const scanCode = req.params.scan_code;
-
   const query = `
     SELECT
-      i.id, i.nama_item, i.photo_path, i.upload_date, i.scan_code, i.item_condition, i.permendagri_code,
+      i.id, i.nama_item, i.photo_path, i.upload_date, i.scan_code,
+      i.item_condition, i.permendagri_code, i.harga,
       u.nama as user_nama
     FROM items i
     JOIN users u ON i.user_id = u.id
     WHERE i.scan_code = ?
-  `; // Sesuaikan nama kolom 'condition' menjadi 'item_condition'
+  `;
 
   db.query(query, [scanCode], (err, results) => {
     if (err) {
@@ -189,14 +188,40 @@ app.get('/items/:scan_code', verifyToken, (req, res) => {
     }
     const item = results[0];
     if (item.photo_path) {
-        item.photo_url = `${req.protocol}://${req.get('host')}/${item.photo_path.replace(/\\/g, '/')}`;
+        // Paksa https:// untuk URL ngrok
+        item.photo_url = `https://${req.get('host')}/${item.photo_path.replace(/\\/g, '/')}`;
     }
     res.send(item);
   });
 });
+
+// ✅ --- Pintu #6 (BARU): Update Kondisi Item ---
+app.put('/items/update-status/:scan_code', verifyToken, (req, res) => {
+  const scanCode = req.params.scan_code;
+  // Ambil 'new_condition' dari body request yang dikirim Ionic
+  const { new_condition } = req.body; 
+
+  if (!new_condition) {
+    return res.status(400).send({ message: 'Kondisi baru (new_condition) wajib diisi.' });
+  }
+
+  // Gunakan nama kolom yang benar: 'item_condition'
+  const query = "UPDATE items SET item_condition = ? WHERE scan_code = ?";
+  
+  db.query(query, [new_condition, scanCode], (err, results) => {
+    if (err) {
+      console.error('Error updating item condition:', err);
+      return res.status(500).send({ message: 'Gagal update kondisi item.' });
+    }
+    if (results.affectedRows === 0) {
+      return res.status(404).send({ message: 'Barang dengan kode scan tersebut tidak ditemukan.' });
+    }
+    res.send({ message: 'Kondisi barang berhasil diperbarui!' });
+  });
+});
 // -----------------------------------------------------------
 
-// Jalankan dapurnya
-app.listen(3000, () => {
-  console.log('Server API berjalan di http://localhost:3000');
+// ✅ Jalankan dapurnya di 0.0.0.0 agar bisa diakses dari HP
+app.listen(3000, '0.0.0.0', () => {
+  console.log('Server API berjalan di http://0.0.0.0:3000 (siap menerima koneksi jaringan)');
 });
